@@ -3,6 +3,11 @@ from bs4 import BeautifulSoup
 import argparse
 import re
 from termcolor import colored
+import xmltodict
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from urllib3.exceptions import InsecureRequestWarning
+requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
 # Wordpress regex
 
@@ -19,10 +24,33 @@ def parse():
     if args.url:
         print(colored( '[+] Given URL: ' + args.url, 'green'))
         return args.url
+
+def get_wp_version(url, response):
+    print(colored("[+] Detecting Wordpress version...", "blue"))
+    version = ''
+    
+    r1 = re.findall(r'<meta name=\"generator\" content=\"WordPress (.*?)\"', response.text)
+    if r1!=[]:
+        version = r1[0]
+    if version=='':
+        response2 = requests.get(url +'/feed/')
+        r2 = re.findall(r'<generator>https://wordpress.org/\?v=(.*?)</generator>', response2.text)
+        if r2!=[]:
+            version = r2[0]
+        if version == '':
+            response3 = requests.get(url + '/wp-links-opml.php')
+            r3 = re.findall(r'generator=\"wordpress/(.*?)\"', response3.text)
+            if r3!=[]:
+                version = r3[0]
+
+    if version == '':
+        print(colored("[!] Wordpress version not detected", "red"))
+    else:
+        print(colored(f"[*] Wordpress version: {version}", "green"))
     
 def is_wp(url):
     # Checks if the given url is a WordPress installation.
-    print(colored("Detecting Wordpress version...", "blue"))
+    print(colored("[+] Detecting Wordpress", "blue"))
     wp_signatures = {
             1: url + "/wp-login.php",
             2: url + "/wp-content/",
@@ -34,17 +62,94 @@ def is_wp(url):
         }
     for url in wp_signatures.values():
         r = requests.get(url)
-        # Regex to detect version number, not working.
-        # wp_match =  re.search(
-        #         r'Version ([0-9]+\.[0-9]+\.?[0-9]*)',
-        #         str(r.text)
-        #     )
         if r:
             print(colored('[*] Wordpress CMS detected! :  ' , 'green') + url)
-            return r #supposed to return the version number, but not working for now so returning just the response
+            return get_wp_version(url,r) #supposed to return the version number, but not working for now so returning just the response
     print("Wordpress not detected")
     
+def get_joomla_version(url):
+    version_flag=False
+    headers = {'Connection': 'keep-alive','Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'}
 
+    properties ={'verify': False,'allow_redirects': True,'headers': headers
+    }
+    print("[+] Detecting Joomla! version...")
+    response = requests.get(f"{url}/language/en-GB/en-GB.xml", **properties)
+    
+    res_headers= response.headers
+    if response.ok and "application/xml" in res_headers  or "text/xml" in res_headers:
+            data = xmltodict.parse(response.content)
+            version = data["metafile"]["version"]
+            print(colored(f"[*] Joomla version is: {version} ","green"))
+            version_flag=True
+    else:
+        response = requests.get(f"{url}/administrator/manifests/files/joomla.xml")
+        res_headers= response.headers
+        if response.ok and "application/xml" in res_headers  or "text/xml" in res_headers:
+            data = parse(response.content)
+            version = data["extension"]["version"]
+            print(colored(f"[*] Joomla version is: {version}","green"))
+            version_flag=True
+    return version_flag
+        
+        
+        
+    
+    
+def is_joomla(url):
+    print("[+] Detecting Joomla!")
+    response = requests.get(url)
+    if response.ok and '<meta name="generator" content="Joomla!' in response.text: 
+        print(colored("[*] Joomla! CMS detected","green"))
+        flag = get_joomla_version(url)
+        if not flag:
+            print(colored("[-] The Joomla! version could not be detected", "yellow"))
+            
+    else:
+        print(colored("[!] Joomla! CMS not detected", "red"))
+        
+def is_drupal(url: str):
+    print(colored("[+] Detecting Drupal...", "blue"))
+    if not url.endswith('/'):
+        url+='/'
+    session = requests.Session()
+    retry = Retry(connect=3, backoff_factor=0.5)
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+
+    drupal_signatures = [
+      url + 'CHANGELOG.txt',
+      url + 'core/CHANGELOG.txt',
+      url + 'includes/bootstrap.inc',
+      url + 'core/includes/bootstrap.inc',
+      url + 'includes/database.inc',
+      url + 'includes/database/database.inc',
+      url + 'core/includes/database.inc'
+    ]
+    headers = {'user-agent': 'Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.0)'}
+    version = 0
+    drupal=False
+    for signature in drupal_signatures:
+        response = session.get(signature,headers=headers, verify=False)
+        if response.ok:
+            r = response.text.splitlines()
+            for line in r:
+                if "Drupal" in line:
+                    drupal=True
+                    v = re.search(r"([\d][.][\d]?[.]?[\d])", line)
+                    if v is not None:
+                        version = v.group(0)
+                        break
+        if version!=0:
+            break
+    if drupal:
+        print(colored("[*] Drupal CMS detected","green"))
+    if version==0:
+        print(colored("[!] Drupal CMS version not detected", "red"))
+    else:
+        print(colored(f"[*] Druapl version is: {version}","green"))
+    return version
     
 url = parse()
 
@@ -73,6 +178,8 @@ if response.status_code == 200:
     wp_flag = is_wp(url)
     # if wp_flag:
     #     print("Wordpress version: "+wp_flag)
+    is_joomla(url)
+    drupal_version = is_drupal(url)
     
             
 else:
