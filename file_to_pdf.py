@@ -1,6 +1,24 @@
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 import sys
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+template_env = Environment(
+        loader=FileSystemLoader("templates"),
+        autoescape=select_autoescape(['html', 'xml'])
+    )
+def generate_report(data):
+    template = template_env.get_template("RT1.html")
+    rendered_html = template.render(data=data)
+    return rendered_html
+def save_to_html(filename, html_content):
+    with open(filename, "w") as html_file:
+        html_file.write(html_content)
+
+
+
+
+
+
+
 
 def create_pdf(input_filename, output_filename):
     c = canvas.Canvas(output_filename, pagesize=letter)
