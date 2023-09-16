@@ -7,9 +7,9 @@ import xmltodict
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib3.exceptions import InsecureRequestWarning
-
+from file_to_pdf import generate_report, save_to_html
 from library_detect import detect_libs
-from cve_query import search_cve_by_keyword
+from cve_query import search_cve_by_keyword, get_cvss
 
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
@@ -20,6 +20,8 @@ retry = Retry(connect=3, backoff_factor=0.5)
 adapter = HTTPAdapter(max_retries=retry)
 session.mount('http://', adapter)
 session.mount('https://', adapter)
+
+data = {}
 
 def parse():
     parser = argparse.ArgumentParser()
@@ -189,6 +191,7 @@ def detect_shopify(url):
         return f"Error: {str(e)}"
 
 url = parse()
+data["target"]= url
 
 response = requests.get(url)
 
@@ -225,14 +228,28 @@ if response.status_code == 200:
     
     for cms in detected_cms:
         if detected_cms[cms]:
+            data["detected_cms"]= cms
             print(colored(f"[+] Retrieving CVE details for {cms}...", "blue"))
             cve_data = search_cve_by_keyword(cms + " " + detected_cms[cms])
             if cve_data:
                 for cve_entry in cve_data["result"]["CVE_Items"]:
                     cve_id = cve_entry["cve"]["CVE_data_meta"]["ID"]
                     description = cve_entry["cve"]["description"]["description_data"][0]["value"]
-                    print(f"- CVE ID: {cve_id}")
-                    print(f"- Description: {description}")
+                    cvss_score = get_cvss(cve_id)
+                    cvss = float(cvss_score) if cvss_score !="None" else 0
+                    if cvss>9:
+                        color = "red"
+                    elif cvss>7:
+                        color = "magenta"
+                    elif cvss>4:
+                        color = "yellow"
+                    elif cvss >0:
+                        color = "green"
+                    else:
+                        color = "white"
+                    print(colored(f"- CVE ID: {cve_id}",color))
+                    print(colored(f"- CVSS: {cvss_score}", color))
+                    print(colored(f"- Description: {description}", color))
                     print("------")
     for lib in detected_libs:
         if detected_libs[lib]:
@@ -242,10 +259,26 @@ if response.status_code == 200:
                 for cve_entry in cve_data["result"]["CVE_Items"]:
                     cve_id = cve_entry["cve"]["CVE_data_meta"]["ID"]
                     description = cve_entry["cve"]["description"]["description_data"][0]["value"]
-                    print(f"- CVE ID: {cve_id}")
-                    print(f"- Description: {description}")
-                    print("------")      
+                    cvss_score = get_cvss(cve_id)
+                    cvss = float(cvss_score) if cvss_score !="None" else 0
+                    if cvss>9:
+                        color = "red"
+                    elif cvss>7:
+                        color = "magenta"
+                    elif cvss>4:
+                        color = "yellow"
+                    elif cvss >0:
+                        color = "green"
+                    else:
+                        color = "white"
+                    print(colored(f"- CVE ID: {cve_id}",color))
+                    print(colored(f"- CVSS: {cvss_score}", color))
+                    print(colored(f"- Description: {description}", color))
+                    print("------")
             else:
                 print(colored(f"[#] Failed to fetch CVE details of {lib} from the database. Please try searching for CVE's manually", "yellow"))    
+    # rendered_html = generate_report(data)
+    # save_to_html(filename, rendered_html)
+
 else:
     print("[!] Failed to fetch the web page.")
