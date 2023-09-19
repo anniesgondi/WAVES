@@ -2,17 +2,23 @@ import requests
 from termcolor import colored
 
 def search_cve_by_keyword(keyword):
-    base_url = "https://services.nvd.nist.gov/rest/json/cves/1.0"
-    search_url = f"{base_url}?keyword={keyword}&resultsPerPage=10"
+    base_url = "https://cve.circl.lu/api/query"
+    params = {
+        "cpe": f"cpe:/a:{keyword}:{keyword}"
+    }
     
     try:
-        response = requests.get(search_url)
-        response.raise_for_status()
+        response = requests.get(base_url, params=params)
+        response.raise_for_status() 
         cve_data = response.json()
         return cve_data
     except requests.exceptions.RequestException as e:
-        print(f"Error: {e}")
+        print(f"Error making the request: {e}")
         return None
+    except ValueError as ve:
+        print(f"Error parsing JSON response: {ve}")
+        return None
+    
 def get_cvss(id):
     url = f"https://cve.circl.lu/api/cve/{id}"
     try: 
