@@ -41,7 +41,10 @@ def main():
             cve_id = cve_entry["cve"]["CVE_data_meta"]["ID"]
             description = cve_entry["cve"]["description"]["description_data"][0]["value"]
             cvss_score = get_cvss(id)
-            cvss = float(cvss_score) if cvss_score !="None" else 0
+            try:
+                cvss = float(cvss_score) if cvss_score !="None" else 0
+            except:
+                cvss =0
             if cvss>9:
                 color = "red"
             elif cvss>7:
