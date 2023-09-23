@@ -10,6 +10,8 @@ from urllib3.exceptions import InsecureRequestWarning
 from file_to_pdf import generate_report, save_to_html
 from library_detect import detect_libs
 from cve_query import search_cve_by_keyword, get_cvss
+from crawl import crawl_urls
+from xss import check_xss
 
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
@@ -28,13 +30,19 @@ def parse():
  
     # Adding optional argument
     parser.add_argument("-u", "--url", help = "URl to be crawled")
+    parser.add_argument("-o","--output", help="File name of report to be generated")
     
     # Read arguments from command line
     args = parser.parse_args()
     
+    arg_list = []
     if args.url:
+        arg_list.append(args.url)
         print(colored( '[+] Given URL: ' + args.url, 'green'))
-        return args.url
+    if args.output:
+        arg_list.append(args.output)
+    return arg_list
+    
 
 def get_wp_version(url, response):
     version=0
@@ -45,12 +53,12 @@ def get_wp_version(url, response):
     if r1!=[]:
         version = r1[0]
     if version=='':
-        response2 = requests.get(url +'/feed/')
+        response2 = requests.get(url +'/feed/',verify=False)
         r2 = re.findall(r'<generator>https://wordpress.org/\?v=(.*?)</generator>', response2.text)
         if r2!=[]:
             version = r2[0]
         if version == '':
-            response3 = requests.get(url + '/wp-links-opml.php')
+            response3 = requests.get(url + '/wp-links-opml.php',verify=False)
             r3 = re.findall(r'generator=\"wordpress/(.*?)\"', response3.text)
             if r3!=[]:
                 version = r3[0]
@@ -65,7 +73,7 @@ def is_wp(url):
     # Checks if the given url is a WordPress installation.
     print(colored("[+] Detecting Wordpress", "blue"))
     headers = {'user-agent': 'Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.0)'}
-    ping = requests.get(url, headers=headers)
+    ping = requests.get(url, headers=headers,verify=False)
     # session = requests.Session()
     # retry = Retry(connect=3, backoff_factor=0.5)
     # adapter = HTTPAdapter(max_retries=retry)
@@ -81,7 +89,7 @@ def is_wp(url):
             7: url + "/wp-content/themes/",
         }
     for url in wp_signatures.values():
-        r = session.get(url, headers=headers)
+        r = session.get(url, headers=headers,verify=False)
         if r:
             print(colored('[*] Wordpress CMS detected! :  ' , 'green') + url)
             return get_wp_version(url,ping) #supposed to return the version number, but not working for now so returning just the response
@@ -94,7 +102,7 @@ def get_joomla_version(url):
     properties ={'verify': False,'allow_redirects': True,'headers': headers
     }
     print(colored("[+] Detecting Joomla! version...","blue"))
-    response = requests.get(f"{url}/language/en-GB/en-GB.xml", **properties)
+    response = requests.get(f"{url}/language/en-GB/en-GB.xml",verify=False, **properties)
     
     res_headers= response.headers
     if response.ok and "application/xml" in res_headers  or "text/xml" in res_headers:
@@ -117,7 +125,7 @@ def get_joomla_version(url):
 def is_joomla(url):
     version = 0
     print(colored("[+] Detecting Joomla!","blue"))
-    response = requests.get(url)
+    response = requests.get(url,verify=False)
     if response.ok and '<meta name="generator" content="Joomla!' in response.text: 
         print(colored("[*] Joomla! CMS detected","green"))
         version = get_joomla_version(url)
@@ -178,7 +186,7 @@ def is_drupal(url: str):
 def detect_shopify(url):
     try:
         print(colored("[+] Detecting Shopify CMS...","blue"))
-        response = requests.get(url)
+        response = requests.get(url,verify=False)
         response.raise_for_status()
         html_content = response.text
         shopify_patterns = [
@@ -190,10 +198,19 @@ def detect_shopify(url):
     except requests.exceptions.RequestException as e:
         return f"Error: {str(e)}"
 
-url = parse()
+print(''' __      _____   _____ ___ 
+ \ \    / /_\ \ / / __/ __|
+  \ \/\/ / _ \ V /| _|\__ \\
+   \_/\_/_/ \_\_/ |___|___/
+                           ''')
+print("Web Application Vulnerability and Exploit Scanner")
+print()
+args = parse()
+url = args[0]
+filename=args[1]
 data["target"]= url
 
-response = requests.get(url)
+response = requests.get(url, verify=False)
 
 if response.status_code == 200:
 
@@ -208,7 +225,7 @@ if response.status_code == 200:
     try:
         detected_libs = detect_libs(url,soup,session)
     except:
-        pass
+        detected_libs=[]
                 
     print()
     print(colored("[+] Detecting CMS...","blue"))
@@ -225,10 +242,15 @@ if response.status_code == 200:
     detected_cms = {"Wordpress": wp_version, "Joomla": joomla_version, "Drupal": drupal_version}
     # Listing CVE's
     print()
-    
+    data["critical"]=0
+    data["high"]=0
+    data["medium"]=0
+    data["low"]=0
+    data["detected_libs"]=""
+    data["cves"]=[]
     for cms in detected_cms:
         if detected_cms[cms]:
-            data["detected_cms"]= cms
+            data["detected_cms"]= f"{cms} (v {detected_cms[cms]})"
             print(colored(f"[+] Retrieving CVE details for {cms}...", "blue"))
             cve_data = search_cve_by_keyword(cms + " " + detected_cms[cms])
             if cve_data:
@@ -236,23 +258,33 @@ if response.status_code == 200:
                     cve_id = cve_entry["cve"]["CVE_data_meta"]["ID"]
                     description = cve_entry["cve"]["description"]["description_data"][0]["value"]
                     cvss_score = get_cvss(cve_id)
-                    cvss = float(cvss_score) if cvss_score !="None" else 0
+                    try:
+                        cvss = float(cvss_score) if cvss_score !="None" else 0
+                    except:
+                        cvss = 0
                     if cvss>9:
                         color = "red"
+                        data["critical"]+=1
                     elif cvss>7:
                         color = "magenta"
+                        data["high"]+=1
                     elif cvss>4:
                         color = "yellow"
+                        data["medium"]+=1
                     elif cvss >0:
                         color = "green"
+                        data["low"]+=1
                     else:
                         color = "white"
+                    data["cves"].append({"id":cve_id, "cvss": cvss_score,"desc": description})
                     print(colored(f"- CVE ID: {cve_id}",color))
                     print(colored(f"- CVSS: {cvss_score}", color))
                     print(colored(f"- Description: {description}", color))
+                    # data["cve_details"]
                     print("------")
     for lib in detected_libs:
         if detected_libs[lib]:
+            data["detected_libs"]+= f"{lib} (v {detected_libs[lib]}), "
             print(colored(f"[+] Retrieving CVE details for {lib}...", "blue"))
             cve_data = search_cve_by_keyword(lib + " " + detected_libs[lib])
             if cve_data['resultsPerPage']!=0:
@@ -271,14 +303,36 @@ if response.status_code == 200:
                         color = "green"
                     else:
                         color = "white"
+                    data["cves"].append({"id":cve_id, "cvss": cvss_score,"desc": description})
                     print(colored(f"- CVE ID: {cve_id}",color))
                     print(colored(f"- CVSS: {cvss_score}", color))
                     print(colored(f"- Description: {description}", color))
                     print("------")
             else:
                 print(colored(f"[#] Failed to fetch CVE details of {lib} from the database. Please try searching for CVE's manually", "yellow"))    
-    # rendered_html = generate_report(data)
-    # save_to_html(filename, rendered_html)
+    try:
+        rendered_html = generate_report(data)
+        save_to_html(filename, rendered_html)
+        print(colored(f"[*] Generated report file \'{filename}\' successfully!", "green"))
+    except:
+        print(colored("[!] Failed to generate report file", "red"))
 
+    
+    con = input(colored("[] Initial scanning done. Would you like to proceed with XSS scan? (y/n): "))
+    if con!= 'y' and con!="Y":
+        exit(0)
+    
+    print(colored("[+] Crawling URLS with GET parameters...", "blue"))
+    crawl_urls(url, "crawled_links.txt")
+    
+    # Not executing from here
+    print(colored("[*] Crawling phase complete. Checking for RXSS...", "blue"))
+    payload = input(colored("[] Enter your XSS payload. Leave blank to use default payload (<script>alert('webscan')</script>): "))
+    if payload:
+        check_xss(payload, open("crawled_links.txt").readlines())
+    else:
+        check_xss("<script>alert('webscan')</script>", open("crawled_links.txt").readlines())
+    
+    
 else:
     print("[!] Failed to fetch the web page.")
